@@ -11,8 +11,8 @@ On Render (start command):
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..routers.pipeline import router as pipeline_router
-from ..routers.health import router as health_router
+from .routers.pipeline import router as pipeline_router
+from .routers.health import router as health_router
 
 # ── App ───────────────────────────────────────────────────────
 app = FastAPI(
