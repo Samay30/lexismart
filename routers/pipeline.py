@@ -1,78 +1,154 @@
 """
-backend/routers/pipeline.py — FastAPI router for the pipeline endpoints.
+routers/pipeline.py — FastAPI router.
 
 Endpoints
 ---------
-POST /api/run
-    Run the full Pareto summarisation pipeline.
-    Body: PipelineRequest (JSON)
-    Response: PipelineResponse (JSON)
-
-POST /api/score
-    Score a single text (FRE + readability breakdown).
-    Useful for the live source-stats display.
-    Body: { "text": "..." }
-    Response: readability metrics dict
+POST /v1/generate   — called directly by the frontend (generate text)
+POST /v1/embed      — called directly by the frontend (embed text)
+POST /api/run       — full server-side pipeline
+POST /api/score     — live readability scoring (no OpenAI call)
 """
 
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from schemas import PipelineRequest, PipelineResponse
+from schemas import (
+    GenerateRequest, GenerateResponse,
+    EmbedRequest, EmbedResponse,
+    PipelineRequest, PipelineResponse,
+)
 from pipeline import run_pipeline
-from metrics import compute_readability, compute_fkgl_raw
+from metrics import compute_readability, text_stats, compute_fkgl_raw
+from openai_client import AsyncOpenAIClient
+from config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Run pipeline ──────────────────────────────────────────────
+# ── Shared client factory ─────────────────────────────────────
 
-@router.post("/run", response_model=PipelineResponse)
-async def run(request: PipelineRequest) -> PipelineResponse:
+def _get_client() -> AsyncOpenAIClient:
     """
-    Execute the full readability-controlled summarisation pipeline.
+    Build an AsyncOpenAIClient from the server-side env key.
+    Returns 503 immediately if OPENAI_API_KEY is not configured —
+    no point retrying a missing key.
+    """
+    if not settings.openai_api_key:
+        logger.error("OPENAI_API_KEY is not set in environment")
+        raise HTTPException(
+            status_code=503,
+            detail="Service not configured — contact the administrator.",
+        )
+    return AsyncOpenAIClient(
+        api_key        = settings.openai_api_key,
+        model          = settings.openai_model,
+        embed_model    = settings.openai_embed_model,
+        max_tokens     = settings.openai_max_tokens,
+        retry_attempts = settings.openai_retry_attempts,
+        retry_delay_ms = settings.openai_retry_delay_ms,
+    )
 
-    1. Embed source text
-    2. Generate N candidate summaries (GPT-4o, temperature-varied)
-    3. Compute FRE + cosine similarity for each candidate
-    4. Extract Pareto frontier
-    5. Constrained selection: argmax FRE | Sim ≥ τ
-    6. Iterative refinement loop
-    7. Return best summary + all candidates + Pareto frontier + log
+
+def _handle_openai_error(exc: Exception, endpoint: str) -> HTTPException:
     """
+    Log the real exception server-side (visible in Render logs),
+    then return a sanitised HTTPException for the client.
+
+    The raw OpenAI error message is included so the frontend can show
+    actionable feedback (e.g. "Invalid API key", "Rate limited").
+    Internal tracebacks are never sent to the client.
+    """
+    real_msg = str(exc)
+    logger.exception("OpenAI call failed on %s: %s", endpoint, real_msg)
+
+    # Pass through specific actionable messages; hide everything else
+    PASSTHROUGH = ("Invalid API key", "Rate limited", "quota exceeded", "not set")
+    client_msg = (
+        real_msg if any(k in real_msg for k in PASSTHROUGH)
+        else "Service unavailable — please try again shortly."
+    )
+    return HTTPException(status_code=502, detail=client_msg)
+
+
+# ── POST /v1/generate ─────────────────────────────────────────
+
+@router.post("/v1/generate", response_model=GenerateResponse)
+async def v1_generate(body: GenerateRequest) -> GenerateResponse:
+    """
+    Generate text via GPT-4o.
+    Request:  { "system": str, "user": str, "temperature": float }
+    Response: { "text": str }
+    """
+    client = _get_client()
     try:
-        result = await run_pipeline(request)
-        return result
-    except RuntimeError as exc:
-        # Surface clean API errors (invalid key, quota, etc.)
-        raise HTTPException(status_code=502, detail=str(exc))
+        text = await client.complete(
+            system      = body.system,
+            user        = body.user,
+            temperature = body.temperature,
+        )
+        return GenerateResponse(text=text)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Internal error: {exc}")
+        raise _handle_openai_error(exc, "/v1/generate")
 
 
-# ── Single-text scoring ───────────────────────────────────────
+# ── POST /v1/embed ────────────────────────────────────────────
+
+@router.post("/v1/embed", response_model=EmbedResponse)
+async def v1_embed(body: EmbedRequest) -> EmbedResponse:
+    """
+    Embed text via text-embedding-3-small.
+    Request:  { "text": str }
+    Response: { "embedding": float[] }
+    """
+    client = _get_client()
+    try:
+        embedding = await client.embed(body.text)
+        return EmbedResponse(embedding=embedding)
+    except Exception as exc:
+        raise _handle_openai_error(exc, "/v1/embed")
+
+
+# ── POST /api/run ─────────────────────────────────────────────
+
+@router.post("/api/run", response_model=PipelineResponse)
+async def run(request: PipelineRequest) -> PipelineResponse:
+    """Full server-side Pareto pipeline."""
+    try:
+        return await run_pipeline(request)
+    except Exception as exc:
+        raise _handle_openai_error(exc, "/api/run")
+
+
+# ── POST /api/score ───────────────────────────────────────────
 
 class ScoreRequest(BaseModel):
     text: str
 
 
-@router.post("/score")
+@router.post("/api/score")
 async def score_text(body: ScoreRequest) -> dict:
     """
     Compute readability metrics for a single text.
-    Used by the frontend for the live source-stats bar.
+    Pure local computation — no OpenAI call.
+
+    FIX: compute_fkgl_raw(w, sy, s) takes three ints, not a string.
+    We call text_stats() first to get the raw counts.
     """
     if not body.text.strip():
         raise HTTPException(status_code=422, detail="text must not be empty")
 
-    rd    = compute_readability(body.text)
-    grade = compute_fkgl_raw(body.text)
+    rd = compute_readability(body.text)
 
+    # compute_fkgl_raw needs (word_count, syllable_count, sentence_count)
+    # — these are available on the ReadabilityScores dataclass as .fkgl_raw
+    # directly, so we just use that instead of calling it again.
     return {
         "composite":  rd.composite,
         "fre":        rd.fre,
         "fkgl":       rd.fkgl,
-        "fkgl_raw":   grade,
+        "fkgl_raw":   rd.fkgl_raw,   # ← was: compute_fkgl_raw(body.text) — wrong!
         "ttr":        rd.ttr,
         "words":      rd.words,
         "sentences":  rd.sentences,
