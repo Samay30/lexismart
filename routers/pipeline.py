@@ -16,7 +16,7 @@ from schemas import (
     EmbedRequest, EmbedResponse,
     PipelineRequest, PipelineResponse,
 )
-from backend.routers.pipeline import run_pipeline
+from routers.pipeline import run_pipeline
 from metrics import compute_readability, compute_fkgl_raw
 from openai_client import AsyncOpenAIClient
 from config import settings
