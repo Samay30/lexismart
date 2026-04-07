@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 
-from backend.routers import pipeline, health
+from routers import pipeline, health
 
 # ── App ──────────────────────────────────────────────────────
 app = FastAPI(
