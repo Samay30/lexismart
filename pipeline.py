@@ -24,12 +24,12 @@ import logging
 import time
 from typing import Optional
 
-from backend.config import settings
-from backend.schemas import PipelineRequest, PipelineResponse, SummaryResult, CandidateOut
-from backend.metrics import compute_readability
-from backend.openai_client import AsyncOpenAIClient, compute_similarity
-from backend.pareto import make_candidate, pareto_filter, constrained_select
-from backend.prompts import (
+from config import settings
+from schemas import PipelineRequest, PipelineResponse, SummaryResult, CandidateOut
+from metrics import compute_readability
+from openai_client import AsyncOpenAIClient, compute_similarity
+from pareto import make_candidate, pareto_filter, constrained_select
+from prompts import (
     SYSTEM_GENERATE, SYSTEM_REFINE,
     prompt_generate, prompt_fidelity, prompt_split, prompt_vocab,
 )

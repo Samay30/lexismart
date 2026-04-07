@@ -26,8 +26,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from backend.schemas import SummaryResult
-from backend.metrics import compute_readability
+from schemas import SummaryResult
+from metrics import compute_readability
 
 logger = logging.getLogger(__name__)
 

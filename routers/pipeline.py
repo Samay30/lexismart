@@ -18,9 +18,9 @@ POST /api/score
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.schemas import PipelineRequest, PipelineResponse
-from backend.pipeline import run_pipeline
-from backend.metrics import compute_readability, compute_fkgl_raw
+from schemas import PipelineRequest, PipelineResponse
+from pipeline import run_pipeline
+from metrics import compute_readability, compute_fkgl_raw
 
 router = APIRouter()
 
