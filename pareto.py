@@ -224,7 +224,7 @@ def constrained_select(
         The selected optimal candidate.
     """
     # Feasible set: sim ≥ τ
-    feasible = [c for c in candidates if 0.9 >= c.similarity >= 0.85]
+    feasible = [c for c in candidates if c.similarity >= 0.8]
 
     if feasible:
         # Constrained solution: argmax FRE among feasible candidates
