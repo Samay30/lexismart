@@ -2,14 +2,19 @@
 app.py — LexiSmart FastAPI application entry point.
 
 Run with:
-    uvicorn backend.app:app --reload --port 8000
+    uvicorn app:app --reload --port 8000
+
+Frontend is served separately from Netlify (lexismart-v2.netlify.app).
+This backend exposes:
+    GET  /health
+    POST /v1/generate
+    POST /v1/embed
+    POST /api/run      (full pipeline)
+    POST /api/score    (single-text readability scoring)
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pathlib import Path
 
 from routers import pipeline, health
 
@@ -24,23 +29,25 @@ app = FastAPI(
     version="2.0.0",
 )
 
-# ── CORS (allow frontend dev server on any port) ──────────────
+# ── CORS ─────────────────────────────────────────────────────
+# Allow the Netlify frontend and local dev only.
+# Do NOT use allow_origins=["*"] — the API key lives server-side now.
+ALLOWED_ORIGINS = [
+    "https://lexismart-v2.netlify.app",
+    "https://lexismart.netlify.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5500",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 # ── Routers ──────────────────────────────────────────────────
-app.include_router(health.router, prefix="/api", tags=["health"])
-app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
-
-# ── Static files ─────────────────────────────────────────────
-FRONTEND = Path("index.html").parent.parent / "frontend"
-
-# ── Serve index.html at root ──────────────────────────────────
-@app.get("/", include_in_schema=False)
-async def serve_root():
-    return FileResponse(FRONTEND / "templates" / "index.html")
+app.include_router(health.router,   tags=["health"])
+app.include_router(pipeline.router, tags=["pipeline"])
